@@ -1,0 +1,104 @@
+## code #1
+
+  MPI_Request send_request, recv_request;
+  MPI_Status status;
+
+  for (int ipart=0; ipart<PARTS; ipart++) {
+    MPI_Irecv(leftdata+partition_starts[ipart], partition_sizes[ipart], MPI_DOUBLE, recvfrom, ipart, comm, &recv_request);
+    // problem: operating on `leftdata' starts without making sure there is actual data
+    // problem2: memory leak because most request are never waited on.
+    for (int i=partition_starts[ipart]; i<partition_starts[ipart]+partition_sizes[ipart]; i++){
+      myvalue[i] = (procno+1)*(procno+1) + leftdata[i];
+    }
+    MPI_Isend(myvalue+partition_starts[ipart], partition_sizes[ipart], MPI_DOUBLE, sendto, ipart, comm, &send_request);
+  }
+
+  MPI_Wait(&send_request, &status);
+  MPI_Wait(&recv_request, &status);
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+// code #2
+
+MPI_Request request;
+  for (int ipart=0; ipart<PARTS; ipart++) {
+    MPI_Irecv
+      (
+       leftdata+partition_starts[ipart],partition_sizes[ipart],
+       MPI_DOUBLE,recvfrom,ipart,comm,&request);
+    MPI_Wait(&request,MPI_STATUS_IGNORE);
+    // problem: Irecv & immediate wait is kinda pointless: equivalent to regular Recv
+    for (int i=partition_starts[ipart];
+         i<partition_starts[ipart]+partition_sizes[ipart];
+         i++)
+      myvalue[i] = (procno+1)*(procno+1) + leftdata[i];
+    MPI_Isend
+      (
+       myvalue+partition_starts[ipart],partition_sizes[ipart],
+       MPI_DOUBLE,sendto,ipart,comm,&request);
+  }
+  // problem2: Wait call is needed to prevent memory leak
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+// code #3
+
+MPI_Request requests[2];
+
+for (int ipart=0; ipart<PARTS; ipart++) {
+    MPI_Irecv
+        (leftdata+partition_starts[ipart], partition_sizes[ipart], MPI_DOUBLE, recvfrom, 0, comm, &(requests[0]));
+    MPI_Wait(&(requests[0]),MPI_STATUS_IGNORE);
+    for (int i=partition_starts[ipart];
+             i<partition_starts[ipart]+partition_sizes[ipart];
+             i++)
+            myvalue[i] = (procno+1)*(procno+1) + leftdata[i];
+    MPI_Isend
+        (myvalue+partition_starts[ipart], partition_sizes[ipart], MPI_DOUBLE, sendto, 0, comm, &(requests[1]));
+    MPI_Wait(&(requests[1]), MPI_STATUS_IGNORE);
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+// code #4
+
+  MPI_Request reqRecv[PARTS];
+  MPI_Request reqSend[PARTS];
+
+  for (int ipart = 0; ipart < PARTS; ipart++) {
+    MPI_Irecv(leftdata+partition_starts[ipart], partition_sizes[ipart], MPI_DOUBLE, recvfrom, ipart, comm, &reqRecv[ipart]);
+  }
+
+  for (int ipart = 0; ipart < PARTS; ipart++) {
+    int j;
+    MPI_Waitany(PARTS, reqRecv, &j, MPI_STATUS_IGNORE);
+
+    for (int i = partition_starts[j]; i < partition_starts[j]+partition_sizes[j]; i++)
+      myvalue[i] = (procno+1)*(procno+1) + leftdata[i];
+
+    MPI_Isend(myvalue+partition_starts[j], partition_sizes[j], MPI_DOUBLE, sendto, j, comm, &reqSend[j]);
+  }
+
+  MPI_Waitall(PARTS, reqSend, MPI_STATUSES_IGNORE);
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+// code #5
+
+  MPI_Request reqRecv[PARTS];
+  MPI_Request reqSend[PARTS];
+
+  for (int ipart = 0; ipart < PARTS; ipart++) {
+    MPI_Irecv(leftdata+partition_starts[ipart], partition_sizes[ipart], MPI_DOUBLE, recvfrom, ipart, comm, &reqRecv[ipart]);
+  }
+
+  for (int ipart = 0; ipart < PARTS; ipart++) {
+    MPI_Wait(reqRecv+ipart, MPI_STATUS_IGNORE);
+
+    for (int i = partition_starts[ipart]; i < partition_starts[ipart]+partition_sizes[ipart]; i++)
+      myvalue[i] = (procno+1)*(procno+1) + leftdata[i];
+
+    MPI_Isend(myvalue+partition_starts[ipart], partition_sizes[ipart], MPI_DOUBLE, sendto, ipart, comm, &reqSend[ipart]);
+  }
+
+  // final wait to prevent memory leaks.
+  MPI_Waitall(PARTS, reqSend, MPI_STATUSES_IGNORE);
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
