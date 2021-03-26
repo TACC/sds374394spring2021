@@ -1,0 +1,197 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+void transpose(int& value, int matrixSize, MPI_Comm& comm) {
+	if(matrixSize == 1) return;
+	int procno;
+	MPI_Comm_rank(comm, &procno);
+
+	// calculate coordinates
+	int i = procno / matrixSize;
+	int j = procno % matrixSize;
+
+	// split comm. every submatrix gets a different color
+	MPI_Comm newcomm;
+	int color = (i < matrixSize / 2? 0 : 1) * 2 + (j < matrixSize / 2? 0 : 1);
+	
+	// colors:
+	// -----
+	// |0|1|
+	// -----
+	// |2|3|
+	// ----- 	
+
+	MPI_Comm_split(comm, color, procno, &newcomm);	// note: key = procno since I am using the same order
+	transpose(value, matrixSize / 2, newcomm);
+
+	if(color == 1 || color == 2) {
+		int halfsize = matrixSize / 2;
+		int isymm = (i + halfsize) % matrixSize;
+		int jsymm = (j + halfsize) % matrixSize;
+		int nodesymm = isymm*matrixSize + jsymm;
+		if(color == 1) {
+			MPI_Send(&value, 1, MPI_INT, nodesymm, 0, comm);
+			MPI_Recv(&value, 1, MPI_INT, nodesymm, 0, comm, MPI_STATUS_IGNORE);
+		} else {
+			int newval;
+			MPI_Recv(&newval, 1, MPI_INT, nodesymm, 0, comm, MPI_STATUS_IGNORE);
+			MPI_Send(&value, 1, MPI_INT, nodesymm, 0, comm);
+			value = newval;
+		}		
+	}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%% It doesn't have to be literally recursive:
+
+  int value = procno;
+  while(nprocs > 1) { 
+      msize = sqrt(nprocs);
+      int proc_i = procno % msize;
+      int proc_j = procno / msize;
+  
+      if (proc_i<msize/2 && proc_j<msize/2)
+	color = 0;
+      else if(proc_i<msize/2 && proc_j>=msize/2)
+	color = 1;
+      else if(proc_i>=msize/2 && proc_j<msize/2)
+	color = 2;
+      else 
+	color = 3;
+
+      if (color==2)
+	{
+	  MPI_Send(&value,1,MPI_INT,procno+(msize/2-1)*msize+msize/2,0,comm);
+	  MPI_Recv(&urblock,1,MPI_INT,procno+(msize/2-1)*msize+msize/2,0,comm,MPI_STATUS_IGNORE);
+	  value = urblock;
+	}
+	// other colors more or less the same
+
+      MPI_Comm_split(comm,color,procno,&block_comm);
+      MPI_Comm_rank(block_comm, &procno);
+      MPI_Comm_size(block_comm, &nprocs);
+      comm = block_comm;
+
+      }
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%% This student likes short functions and good documentation
+
+int getSwapper(int group, int row, int col, int matrixSize)  {
+    int swapRow, swapCol;
+    if (group == TOP_RIGHT) {
+        swapRow = row + matrixSize / 2;
+        swapCol = col - matrixSize / 2;
+    } else {
+        swapRow = row - matrixSize / 2;
+        swapCol = col + matrixSize / 2;
+    }
+    return swapRow * matrixSize + swapCol;
+}
+// Swaps a single element in the matrix with its corresponding position in the opposite group.
+// The element must be in a group on the off diagonal of the matrix in order to be swapped. If the 
+// element is part of a group on the main diagonal, no swap occurs.
+int swap(int group, int procno, int data, int row, int col, int matrixSize, MPI_Comm comm) {
+    if (group == TOP_LEFT || group == BOTTOM_RIGHT) {
+        return data;
+    }
+    int swapper = getSwapper(group, row, col, matrixSize);
+    int newData;
+    // Higher ranked process sends first to avoid deadlock. Use blocking for simplicity.
+    if (swapper < procno) {
+        MPI_Send(&data, 1, MPI_INT, swapper, 0, comm);
+        MPI_Recv(&newData, 1, MPI_INT, swapper, 0, comm, MPI_STATUS_IGNORE);
+    } else {
+        MPI_Recv(&newData, 1, MPI_INT, swapper, 0, comm, MPI_STATUS_IGNORE);
+        MPI_Send(&data, 1, MPI_INT, swapper, 0, comm);
+    }
+    return newData;
+}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%% an interesting idiom
+
+void transpose(int* myvalue, int len, MPI_Comm comm, int procno) {
+        int sendbuf, recvbuf;
+	// "myvalue" is a single number, passed by reference, not an array.
+        sendbuf = *myvalue;
+        recvbuf = -1;
+
+	// loop over the whole matrix
+        for (int i=0; i<len/2; i++) {
+                for (int j=0; j<len/2; j++) {
+                        int recvfrom = len/2 + i + j*len;
+                        int sendto = len/2*len + i + j*len;
+
+			// ... and element (i,j) is my element, then swap.
+                        if (procno == recvfrom)
+                        {
+                                //MPI_sendrecv(&sendbuf,1,MPI_DOUBLE,sendto,0,&recvbuf,1,MPI_DOUBLE,recvfrom,0,comm,MPI_STATUS_IGNORE);
+                                MPI_Send(&sendbuf,1,MPI_DOUBLE,sendto,0,comm);
+                                MPI_Recv(&recvbuf,1,MPI_DOUBLE,sendto,1,comm,MPI_STATUS_IGNORE);
+                                *myvalue=recvbuf;
+
+Ok, but why not:
+recvfrom  = procno;
+sendto    = .... some formula from procno ....
+MPI_Send / Recv
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%% Nope.
+
+void transpose(MPI_Comm comm, double *data, double *data_new, int SIZE){
+
+  MPI_Comm_rank(comm, &procno_aux); // so that's basically the process itself
+
+  int start12[2]={0,SUBSIZE};
+  MPI_Datatype mysubarray21;
+  MPI_Type_create_subarray(2, mat_size, sub_size, start12, MPI_ORDER_C, MPI_DOUBLE, &mysubarray21);
+
+  //Malloc the subsizes
+  double *sub12;
+  sub12 = (double*)malloc((nprocs_aux/4)*sizeof(double));
+
+  //Defining the colors
+  int color = (procno_aux*4)/nprocs_aux;
+  MPI_Comm group;
+  MPI_Comm_split(comm, color, nprocs_aux, &group);
+
+  if (color==0) { // skip that
+  } else if (color==1) {//Here we swap 12
+    //First, we send the block
+    MPI_Send(&(data[0]),1,mysubarray21, procno_aux, 12, comm);
+    //Then receive
+    MPI_Recv(&(sub12[0]), SUBSIZE*SUBSIZE, MPI_DOUBLE, procno_aux, 12, comm, MPI_STATUS_IGNORE);
+    transpose(group, sub12, data_new12, SUBSIZE);
+  } // other cases
+
+Oh, and:
+
+[] grep malloc recursivetranspose.c | wc -l
+16
+[] grep free recursivetranspose.c | wc -l
+0
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%% please use an editor that helps with indentation
+
+int swap(MPI_Comm* tR, MPI_Comm* bL)
+{
+    
+for (int i=0; i<4; i++)
+{
+MPI_Comm temp = bL[i];
+MPI_Comm mydata=tR[i];
+int bL_size, tR_size;
+MPI_Comm_size(temp,&bL_size);
+MPI_Comm_size(mydata,&tR_size);
+
+MPI_Comm joined;
+MPI_Intercomm_create(tR,0,bL,0,0,&joined);
+
+for (int j=0;j<bL_size;j++){
+
+int rightdata;
+ MPI_Sendrecv
+    (&procno,1,MPI_INT,j+4,0,
+     &mynum,1,MPI_INT, j,0,joined,MPI_STATUS_IGNORE);
