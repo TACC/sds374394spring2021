@@ -1,0 +1,51 @@
+# -*- makefile -*-
+################################################################
+################################################################
+####
+#### This Makefile belong with the sources
+#### for Introduction to High-Performance Scientific Computing
+#### by Victor Eijkhout
+#### copyright 2010-2021
+####
+#### TeX formatting rules
+####
+################################################################
+################################################################
+
+info ::
+	@echo && echo "================ LaTeX formatting"
+	@echo "Available rules:"
+
+info ::
+	@echo "make format onepass LATEXTARGET=... "
+	@echo "    out of: ${TEXFILES}"
+	@echo "global settings:"
+	@echo "    LATEX=... TEXINPUTS=... "
+LATEX=pdflatex
+EXTRATEXINPUTS=:.
+format : 
+	make onepass LATEXTARGET=${LATEXTARGET}
+	bibtex ${LATEXTARGET}
+	make onepass LATEXTARGET=${LATEXTARGET}
+	makeindex ${LATEXTARGET}
+	make onepass LATEXTARGET=${LATEXTARGET}
+	make onepass LATEXTARGET=${LATEXTARGET}
+onepass :
+	export TEXINPUTS=${TEXINPUTS}${EXTRATEXINPUTS} \
+	 && ${LATEX} --shell-escape ${LATEXTARGET}
+	@make --no-print-directory diagnostics LATEXTARGET=${LATEXTARGET}
+
+.PHONY: diagnostics
+info ::
+	@echo "make diagnostics"
+diagnostics :
+	@if [ -f ${LATEXTARGET}.log ] ; then \
+	    echo "================ Diagnostics ================" \
+	     && ( grep multiply ${LATEXTARGET}.log | grep -v header ) \
+	        || echo 0 >/dev/null \
+	     && ( grep "LaTeX Warning: Citation" ${LATEXTARGET}.log ) \
+	        || echo 0 >/dev/null \
+	     && ( grep "LaTeX Warning: Reference" ${LATEXTARGET}.log ) \
+	        || echo 0 >/dev/null \
+	     && echo "---------------- end of diagnostics --------" \
+	; fi
